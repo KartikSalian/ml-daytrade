@@ -56,7 +56,7 @@ python autorun.py     # start trading loop
 ```
 
 ## Status
-Paper trading since May 2026. Target: 200+ trades over 3 months before evaluating real capital allocation.
+System complete and automated. Paper trading begins May 2026 (Monday). Target: 200+ trades over 3 months before evaluating real capital allocation.
 
 ## Disclaimer
 This is a personal research project. Not financial advice. Past backtest performance does not guarantee future results.
