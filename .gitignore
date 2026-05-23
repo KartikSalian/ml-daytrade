@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.pkl
+*.pt
+*.pth
+models/saved/
+data/cache/
+data/sentiment_history.csv
+data/trade_journal.csv
+data/autorun.log
+data/earnings_cache.pkl
+.DS_Store

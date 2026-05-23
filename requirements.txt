@@ -1,0 +1,31 @@
+# Data
+yfinance>=0.2.36
+pandas>=2.0.0
+numpy>=1.26.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+newsapi-python>=0.2.7
+
+# ML - Tabular
+xgboost>=2.0.0
+scikit-learn>=1.4.0
+
+# ML - Time Series (TFT)
+torch>=2.2.0
+pytorch-forecasting>=1.0.0
+pytorch-lightning>=2.2.0
+
+# ML - Sentiment (FinBERT)
+transformers>=4.40.0
+sentencepiece>=0.2.0
+
+# Backtesting
+vectorbt>=0.26.0
+
+# API
+fastapi>=0.111.0
+uvicorn>=0.30.0
+pydantic>=2.7.0
+
+# Execution
+alpaca-trade-api>=3.3.0
