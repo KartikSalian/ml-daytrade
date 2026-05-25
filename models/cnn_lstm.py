@@ -155,6 +155,7 @@ def load(input_size: int) -> CNNLSTM:
 
 def predict_proba(model: CNNLSTM, sequences: np.ndarray) -> np.ndarray:
     """Returns softmax probabilities (N, 3) for [SELL, HOLD, BUY]."""
+    device = next(model.parameters()).device  # use model's actual device (GPU or CPU)
     model.eval()
     all_probs = []
     loader = DataLoader(
@@ -163,7 +164,7 @@ def predict_proba(model: CNNLSTM, sequences: np.ndarray) -> np.ndarray:
     )
     with torch.no_grad():
         for xb, _ in loader:
-            logits = model(xb.to(DEVICE))
+            logits = model(xb.to(device))
             probs = torch.softmax(logits, dim=1).cpu().numpy()
             all_probs.append(probs)
     return np.vstack(all_probs)

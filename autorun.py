@@ -155,13 +155,38 @@ def main():
         if is_market_hours() and n.hour != last_trade_hour:
             last_trade_hour = n.hour
             log.info(f"--- Signal cycle {n.strftime('%H:%M EST')} ---")
+            max_retries = 3
+            retry_delay = 300  # 5 minutes
+            for attempt in range(1, max_retries + 1):
+                try:
+                    signals = run_once(risk, lgbm, cnn, meta, use_live_sentiment=True)
+                    log_trades(signals)
+                    approved = [s for s in signals if s["approved"]]
+                    log.info(f"Cycle done: {len(signals)} signals, {len(approved)} executed")
+                    break  # success — no retry needed
+                except Exception as e:
+                    log.error(f"Cycle error (attempt {attempt}/{max_retries}): {e}")
+                    if "cuda" in str(e).lower() or "out of memory" in str(e).lower():
+                        log.info("GPU error — falling back to CPU for next attempt")
+                        try:
+                            import torch
+                            torch.cuda.empty_cache()
+                            cnn = cnn.cpu()
+                        except Exception:
+                            pass
+                    if attempt < max_retries and is_market_hours():
+                        log.info("Retrying in 5 minutes...")
+                        time.sleep(retry_delay)
+                    else:
+                        log.error("All retry attempts failed — skipping this cycle")
+
+            # Restore model to GPU after cycle (in case it was moved to CPU)
             try:
-                signals = run_once(risk, lgbm, cnn, meta, use_live_sentiment=True)
-                log_trades(signals)
-                approved = [s for s in signals if s["approved"]]
-                log.info(f"Cycle done: {len(signals)} signals, {len(approved)} executed")
-            except Exception as e:
-                log.error(f"Cycle error: {e}")
+                import torch
+                if torch.cuda.is_available():
+                    cnn = cnn.cuda()
+            except Exception:
+                pass
 
         # ── Sentiment logger (once per day at 4:15 PM EST) ─────────────────
         elif is_sentiment_window() and not sentiment_logged_today:
