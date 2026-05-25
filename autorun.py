@@ -19,9 +19,9 @@ from pathlib import Path
 
 import pytz
 import config
-from data.universe import TICKERS, INTERVAL, FEATURE_COLS
+from data.universe import TICKERS, INTERVAL
 from data.fetcher import get_ohlcv, get_macro_data, merge_macro_features
-from features.engineering import add_technical_features, FEATURE_COLS
+from features.engineering import add_technical_features, add_time_features, FEATURE_COLS
 from models import lgbm_model, cnn_lstm
 from models.ensemble import load_ensemble, build_meta_features
 from risk.manager import RiskManager
@@ -105,6 +105,7 @@ def load_models():
     macro = get_macro_data(period="1mo", interval=INTERVAL, use_cache=False)
     sample = merge_macro_features(sample, macro)
     sample = add_technical_features(sample)
+    sample = add_time_features(sample)
     sample["sentiment_score"] = 0.0
     n_features = len([c for c in FEATURE_COLS if c in sample.columns])
 
