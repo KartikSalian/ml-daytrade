@@ -51,11 +51,16 @@ def get_positions() -> list[dict]:
     ]
 
 
-def get_latest_price(ticker: str) -> float:
+def get_latest_price(ticker: str, signal: int = 1) -> float:
+    """Returns ask price for buys, bid price for sells."""
     client = _get_data_client()
     req = StockLatestQuoteRequest(symbol_or_symbols=ticker)
     quote = client.get_stock_latest_quote(req)
-    return float(quote[ticker].ask_price)
+    q = quote[ticker]
+    price = float(q.bid_price) if signal == -1 else float(q.ask_price)
+    if price <= 0:
+        price = float(q.ask_price) if q.ask_price > 0 else float(q.bid_price)
+    return price
 
 
 def submit_market_order(

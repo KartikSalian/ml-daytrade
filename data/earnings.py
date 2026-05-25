@@ -11,7 +11,9 @@ from pathlib import Path
 import config
 
 CACHE_PATH = Path(__file__).parent / "earnings_cache.pkl"
+CACHE_META_PATH = Path(__file__).parent / "earnings_cache_meta.pkl"
 FINNHUB_BASE = "https://finnhub.io/api/v1"
+CACHE_TTL_DAYS = 7
 
 
 def _fetch_earnings_dates(ticker: str, from_date: str, to_date: str) -> list[str]:
@@ -40,6 +42,18 @@ def save_earnings_cache(cache: dict[str, list[str]]) -> None:
         pickle.dump(cache, f)
 
 
+def _load_cache_meta() -> dict:
+    if CACHE_META_PATH.exists():
+        with open(CACHE_META_PATH, "rb") as f:
+            return pickle.load(f)
+    return {}
+
+
+def _save_cache_meta(meta: dict) -> None:
+    with open(CACHE_META_PATH, "wb") as f:
+        pickle.dump(meta, f)
+
+
 def get_earnings_dates(
     tickers: list[str],
     years_back: int = 2,
@@ -47,20 +61,25 @@ def get_earnings_dates(
 ) -> dict[str, list[str]]:
     """
     Returns {ticker: [date_str, ...]} sorted ascending.
-    Fetches from Finnhub if not cached or refresh=True.
+    Auto-refreshes weekly so upcoming earnings are always current.
     """
     cache = load_earnings_cache()
+    meta = _load_cache_meta()
     today = date.today()
     from_str = (today - timedelta(days=years_back * 365)).strftime("%Y-%m-%d")
-    to_str = (today + timedelta(days=90)).strftime("%Y-%m-%d")  # include upcoming
+    to_str = (today + timedelta(days=90)).strftime("%Y-%m-%d")
 
     for ticker in tickers:
-        if ticker not in cache or refresh:
+        last_fetch = meta.get(ticker)
+        stale = last_fetch is None or (today - last_fetch).days >= CACHE_TTL_DAYS
+        if ticker not in cache or refresh or stale:
             dates = _fetch_earnings_dates(ticker, from_str, to_str)
             cache[ticker] = dates
+            meta[ticker] = today
             print(f"  {ticker}: {len(dates)} earnings dates fetched")
 
     save_earnings_cache(cache)
+    _save_cache_meta(meta)
     return cache
 
 

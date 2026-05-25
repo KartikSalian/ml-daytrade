@@ -6,7 +6,7 @@ from pydantic import BaseModel
 import config  # loads .env
 from data.fetcher import get_ohlcv, get_macro_data, merge_macro_features
 from data.universe import TICKERS, INTERVAL
-from features.engineering import add_technical_features, FEATURE_COLS
+from features.engineering import add_technical_features, add_time_features, FEATURE_COLS
 from models import lgbm_model, cnn_lstm
 from models.ensemble import load_ensemble, build_meta_features
 from risk.manager import RiskManager
@@ -28,6 +28,7 @@ def load_models():
     macro = get_macro_data(period="1mo", interval=INTERVAL, use_cache=False)
     sample = merge_macro_features(sample, macro)
     sample = add_technical_features(sample)
+    sample = add_time_features(sample)
     sample["sentiment_score"] = 0.0
     n_features = len([c for c in FEATURE_COLS if c in sample.columns])
 
@@ -98,6 +99,7 @@ def get_signal(req: SignalRequest):
         df = get_ohlcv(ticker, period="3mo", interval=INTERVAL, use_cache=False)
         df = merge_macro_features(df, macro)
         df = add_technical_features(df)
+        df = add_time_features(df)
         # Auto-fetch live sentiment if caller didn't supply one
         if req.sentiment_score == 0.0:
             try:

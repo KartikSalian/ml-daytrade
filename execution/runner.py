@@ -6,7 +6,7 @@ from datetime import datetime, date
 from data.fetcher import get_ohlcv, get_macro_data, merge_macro_features
 from data.universe import TICKERS, INTERVAL
 from data.earnings import get_earnings_dates, days_until_next_earnings
-from features.engineering import add_technical_features, FEATURE_COLS
+from features.engineering import add_technical_features, add_time_features, FEATURE_COLS
 from models import lgbm_model, cnn_lstm
 from models.ensemble import load_ensemble, build_meta_features
 from risk.manager import RiskManager
@@ -38,6 +38,7 @@ def build_ticker_df(ticker: str, macro: dict) -> pd.DataFrame | None:
         df = get_ohlcv(ticker, period="3mo", interval=INTERVAL, use_cache=False)
         df = merge_macro_features(df, macro)
         df = add_technical_features(df)
+        df = add_time_features(df)
         df["sentiment_score"] = 0.0  # live sentiment added separately
         df["ticker"] = ticker
         df.dropna(inplace=True)
@@ -96,9 +97,20 @@ def run_once(
         print("Fetching sentiment...")
         sentiment_map = compute_sentiment_batch(TICKERS, days_back=1, delay=0.5)
 
+    # Sync open positions into risk manager so max_positions limit works
+    try:
+        live_positions = get_positions()
+        risk_manager.open_positions = {p["ticker"]: p for p in live_positions}
+    except Exception as e:
+        print(f"Warning: could not sync positions — {e}")
+
     # Score every ticker
     signals: list[dict] = []
     for ticker in TICKERS:
+        # Never add to a position we already hold
+        if ticker in risk_manager.open_positions:
+            continue
+
         df = build_ticker_df(ticker, macro)
         if df is None or len(df) < cnn_lstm.SEQ_LEN + 1:
             continue
@@ -127,7 +139,11 @@ def run_once(
 
         # Risk check
         latest_atr = float(df["ATR"].iloc[-1])
-        latest_price = get_latest_price(ticker)
+        try:
+            latest_price = get_latest_price(ticker, signal)
+        except Exception as e:
+            print(f"  {ticker}: price fetch failed — {e}")
+            continue
         dte = days_until_next_earnings(date.today(), earnings_dates.get(ticker, []))
         risk_result = risk_manager.evaluate_signal(
             ticker=ticker,
@@ -183,6 +199,7 @@ def run_loop(interval_minutes: int = 60, use_live_sentiment: bool = True):
     macro = get_macro_data(period="1mo", interval=INTERVAL, use_cache=False)
     sample = merge_macro_features(sample, macro)
     sample = add_technical_features(sample)
+    sample = add_time_features(sample)
     sample["sentiment_score"] = 0.0
     n_features = len([c for c in FEATURE_COLS if c in sample.columns])
 

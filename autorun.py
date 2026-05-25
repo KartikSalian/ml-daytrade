@@ -57,12 +57,24 @@ def now_est() -> datetime:
 
 
 def is_market_hours() -> bool:
+    try:
+        from execution.alpaca import _get_client
+        clock = _get_client().get_clock()
+        return clock.is_open
+    except Exception:
+        # Fallback to time-based check if Alpaca API unavailable
+        n = now_est()
+        if n.weekday() >= 5:
+            return False
+        after_open = n.hour > 9 or (n.hour == 9 and n.minute >= 30)
+        before_close = n.hour < 16
+        return after_open and before_close
+
+
+def is_eod_window() -> bool:
+    """3:50-3:58 PM EST — close all positions before market close."""
     n = now_est()
-    if n.weekday() >= 5:
-        return False
-    after_open = n.hour > 9 or (n.hour == 9 and n.minute >= 30)
-    before_close = n.hour < 16
-    return after_open and before_close
+    return n.weekday() < 5 and n.hour == 15 and 50 <= n.minute <= 58
 
 
 def is_sentiment_window() -> bool:
@@ -117,6 +129,7 @@ def load_models():
         risk_per_trade=0.02,
         max_drawdown=0.10,
         max_positions=5,
+        max_position_pct=0.15,
     )
     log.info(f"Models loaded. Features: {n_features}")
     return lgbm, cnn, meta, risk
@@ -131,6 +144,7 @@ def main():
 
     last_trade_hour = -1
     sentiment_logged_today = False
+    eod_closed_today = False
     today = date.today()
 
     log.info("Waiting for market hours (9:30 AM - 4:00 PM EST)...")
@@ -142,6 +156,7 @@ def main():
         if n.date() != today:
             today = n.date()
             sentiment_logged_today = False
+            eod_closed_today = False
             last_trade_hour = -1
             log.info(f"New trading day: {today}")
 
@@ -187,6 +202,18 @@ def main():
                     cnn = cnn.cuda()
             except Exception:
                 pass
+
+        # ── End-of-day close (3:50 PM EST — before market close) ──────────
+        elif is_eod_window() and not eod_closed_today:
+            eod_closed_today = True
+            log.info("EOD: closing all positions before market close...")
+            try:
+                from execution.alpaca import close_all_positions
+                close_all_positions()
+                risk.open_positions = {}
+                log.info("EOD: all positions closed.")
+            except Exception as e:
+                log.error(f"EOD close error: {e}")
 
         # ── Sentiment logger (once per day at 4:15 PM EST) ─────────────────
         elif is_sentiment_window() and not sentiment_logged_today:

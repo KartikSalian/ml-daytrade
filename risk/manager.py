@@ -77,12 +77,14 @@ class RiskManager:
         max_drawdown: float = 0.10,
         atr_multiplier: float = 2.0,
         max_positions: int = 5,
+        max_position_pct: float = 0.15,  # max 15% of capital per single position
     ):
         self.capital = capital
         self.risk_per_trade = risk_per_trade
         self.max_drawdown = max_drawdown
         self.atr_multiplier = atr_multiplier
         self.max_positions = max_positions
+        self.max_position_pct = max_position_pct
         self.peak_value = capital
         self.open_positions: dict = {}
 
@@ -110,6 +112,11 @@ class RiskManager:
             self.capital, entry_price, stop, self.risk_per_trade
         )
         qty = max(0, int(qty))
+
+        # Hard cap: no single position can exceed max_position_pct of capital
+        max_qty_by_value = int(self.capital * self.max_position_pct / entry_price)
+        qty = min(qty, max_qty_by_value)
+
         dollar_risk = qty * abs(entry_price - stop)
 
         return {
@@ -126,7 +133,7 @@ class RiskManager:
         entry_price: float,
         atr: float,
         current_capital: float,
-        min_confidence: float = 0.45,
+        min_confidence: float = 0.40,
         confidence: float = 0.50,
         days_to_earnings: int = 90,
     ) -> dict:
@@ -135,6 +142,7 @@ class RiskManager:
         Returns approved=True/False with position sizing.
         """
         self.update_peak(current_capital)
+        self.capital = current_capital  # keep sizing in sync with live portfolio
 
         if self.is_halted(current_capital):
             return {"approved": False, "reason": "drawdown_limit_breached"}
