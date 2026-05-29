@@ -36,6 +36,8 @@ JOURNAL_PATH = ROOT / "data" / "trade_journal.csv"
 JOURNAL_FIELDS = [
     "date", "time", "ticker", "signal", "confidence",
     "price", "qty", "stop_loss", "regime", "reason", "approved",
+    "model_set", "sentiment_score",
+    "exit_price", "pnl", "pnl_pct", "exit_type",
 ]
 
 EST = pytz.timezone("US/Eastern")
@@ -110,7 +112,54 @@ def log_trades(signals: list[dict]):
                 "regime": s.get("regime", ""),
                 "reason": s.get("reason", ""),
                 "approved": s["approved"],
+                "model_set": s.get("model_set", ""),
+                "sentiment_score": s.get("sentiment_score", ""),
+                "exit_price": "",
+                "pnl": "",
+                "pnl_pct": "",
+                "exit_type": "",
             })
+
+
+def log_exits(exit_type: str = "EOD"):
+    """Log EXIT rows for all currently open positions before closing them."""
+    try:
+        from execution.alpaca import get_positions
+        positions = get_positions()
+    except Exception as e:
+        log.error(f"Could not fetch positions for exit logging: {e}")
+        return
+
+    if not positions:
+        return
+
+    _ensure_journal()
+    n = now_est()
+    with open(JOURNAL_PATH, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=JOURNAL_FIELDS)
+        for p in positions:
+            qty = float(p["qty"])
+            exit_price = round(float(p["market_value"]) / qty, 4) if qty else 0
+            writer.writerow({
+                "date": n.strftime("%Y-%m-%d"),
+                "time": n.strftime("%H:%M"),
+                "ticker": p["ticker"],
+                "signal": "EXIT",
+                "confidence": "",
+                "price": p["avg_entry"],
+                "qty": int(qty),
+                "stop_loss": "",
+                "regime": "",
+                "reason": "",
+                "approved": "",
+                "model_set": "",
+                "sentiment_score": "",
+                "exit_price": exit_price,
+                "pnl": round(float(p["unrealized_pnl"]), 2),
+                "pnl_pct": round(float(p["unrealized_pnl_pct"]), 4),
+                "exit_type": exit_type,
+            })
+    log.info(f"Exit logs written for {len(positions)} positions.")
 
 
 def load_models():
@@ -237,7 +286,8 @@ def _main():
         # ── End-of-day close (3:50 PM EST — before market close) ──────────
         elif is_eod_window() and not eod_closed_today:
             eod_closed_today = True
-            log.info("EOD: closing all positions before market close...")
+            log.info("EOD: logging exits and closing all positions...")
+            log_exits(exit_type="EOD")
             try:
                 from execution.alpaca import close_all_positions
                 close_all_positions()

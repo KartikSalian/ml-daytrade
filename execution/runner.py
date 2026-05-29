@@ -209,6 +209,8 @@ def run_once(
             "stop_loss": risk_result.get("stop_loss"),
             "reason": risk_result.get("reason", ""),
             "regime": regime_info["regime"],
+            "model_set": stable_regime,
+            "sentiment_score": round(float(sentiment_map.get(ticker, 0.0)), 4),
         })
 
     # Sort by confidence, take top signals
