@@ -163,9 +163,27 @@ FEATURE_COLS = [
     "hour_sin", "hour_cos", "is_open", "is_close", "is_dead_zone", "day_of_week",
 ]
 
-# Extended feature set for next retrain (after alignment fix)
-FEATURE_COLS_V2 = FEATURE_COLS + [
-    "pct_from_52w_high", "pct_from_52w_low",
-    "XLE_ret", "XLF_ret", "XLV_ret",
-    "days_to_earnings",
+# Bear model feature set — adds 6 macro bear indicators on top of base 23
+BEAR_FEATURE_COLS = FEATURE_COLS + [
+    "VIX_momentum",       # 5-period VIX change — fast VIX spike = panic
+    "VIX_zscore",         # VIX vs 30-day mean — how elevated is fear
+    "SP500_realized_vol", # 20-period rolling SP500 volatility — turbulence
+    "HYG_ret",            # High yield bond return — credit stress
+    "TLT_ret",            # Long treasury return — flight to safety
+    "DXY_ret",            # US dollar return — risk-off signal
 ]
+
+
+def add_bear_features(df: pd.DataFrame) -> pd.DataFrame:
+    """6 macro features specifically predictive of bear market conditions."""
+    if "VIX_close" in df.columns:
+        df["VIX_momentum"] = df["VIX_close"].diff(5)
+        vix_mean = df["VIX_close"].rolling(30).mean()
+        vix_std  = df["VIX_close"].rolling(30).std().replace(0, 1)
+        df["VIX_zscore"] = (df["VIX_close"] - vix_mean) / vix_std
+
+    if "SP500_ret" in df.columns:
+        df["SP500_realized_vol"] = df["SP500_ret"].rolling(20).std()
+
+    # HYG_ret, TLT_ret, DXY_ret come from merge_macro_features — nothing to derive
+    return df

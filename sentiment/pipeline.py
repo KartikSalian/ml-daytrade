@@ -1,9 +1,26 @@
 import time
 import pandas as pd
 from datetime import datetime, date
+from pathlib import Path
 
 from sentiment.finbert import score_article, aggregate_scores
 from sentiment.news import get_daily_sentiment_inputs
+
+HISTORY_PATH = Path(__file__).parent.parent / "data" / "sentiment_history.csv"
+
+
+def _load_last_known_score(ticker: str) -> float:
+    """Returns the most recent cached score for a ticker, or 0.0 if none."""
+    if not HISTORY_PATH.exists():
+        return 0.0
+    try:
+        df = pd.read_csv(HISTORY_PATH)
+        rows = df[df["ticker"] == ticker].sort_values("date", ascending=False)
+        if not rows.empty:
+            return float(rows.iloc[0]["sentiment_score"])
+    except Exception:
+        pass
+    return 0.0
 
 
 def compute_ticker_sentiment(
@@ -33,8 +50,9 @@ def compute_sentiment_batch(
             results[ticker] = score
             print(f"  {ticker}: {score:+.3f}")
         except Exception as e:
-            print(f"  {ticker}: error — {e}")
-            results[ticker] = 0.0
+            fallback = _load_last_known_score(ticker)
+            print(f"  {ticker}: error — {e} (using cached {fallback:+.3f})")
+            results[ticker] = fallback
         time.sleep(delay)
     return results
 

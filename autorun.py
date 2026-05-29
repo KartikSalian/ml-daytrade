@@ -11,6 +11,7 @@ Run manually:
 import sys
 sys.path.insert(0, "D:/ml-daytrade")
 
+import os
 import time
 import csv
 import logging
@@ -38,6 +39,7 @@ JOURNAL_FIELDS = [
 ]
 
 EST = pytz.timezone("US/Eastern")
+LOCK_PATH = Path(__file__).parent / "data" / "autorun.lock"
 
 # ── Logging setup ──────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -121,9 +123,8 @@ def load_models():
     sample["sentiment_score"] = 0.0
     n_features = len([c for c in FEATURE_COLS if c in sample.columns])
 
-    lgbm = lgbm_model.load()
-    cnn = cnn_lstm.load(input_size=n_features)
-    meta = load_ensemble()
+    from execution.runner import load_models as load_dual_models
+    bull_models, bear_models = load_dual_models(n_features)
     risk = RiskManager(
         capital=100_000,
         risk_per_trade=0.02,
@@ -132,15 +133,45 @@ def load_models():
         max_position_pct=0.15,
     )
     log.info(f"Models loaded. Features: {n_features}")
-    return lgbm, cnn, meta, risk
+    return bull_models, bear_models, risk
+
+
+def _acquire_lock() -> bool:
+    """Returns True if this instance got the lock, False if another is running."""
+    if LOCK_PATH.exists():
+        pid = LOCK_PATH.read_text().strip()
+        # Check if that process is still alive
+        try:
+            os.kill(int(pid), 0)
+            return False  # process still running
+        except (OSError, ValueError):
+            pass  # process is dead — stale lock, take it
+    LOCK_PATH.write_text(str(os.getpid()))
+    return True
+
+
+def _release_lock():
+    if LOCK_PATH.exists():
+        LOCK_PATH.unlink()
 
 
 def main():
+    if not _acquire_lock():
+        print("Another instance is already running. Exiting.")
+        sys.exit(0)
+
+    try:
+        _main()
+    finally:
+        _release_lock()
+
+
+def _main():
     log.info("=" * 60)
     log.info("Autorun started")
     _ensure_journal()
 
-    lgbm, cnn, meta, risk = load_models()
+    bull_models, bear_models, risk = load_models()
 
     last_trade_hour = -1
     sentiment_logged_today = False
@@ -174,7 +205,7 @@ def main():
             retry_delay = 300  # 5 minutes
             for attempt in range(1, max_retries + 1):
                 try:
-                    signals = run_once(risk, lgbm, cnn, meta, use_live_sentiment=True)
+                    signals = run_once(risk, bull_models, bear_models, use_live_sentiment=True)
                     log_trades(signals)
                     approved = [s for s in signals if s["approved"]]
                     log.info(f"Cycle done: {len(signals)} signals, {len(approved)} executed")

@@ -6,23 +6,45 @@ from datetime import datetime, date
 from data.fetcher import get_ohlcv, get_macro_data, merge_macro_features
 from data.universe import TICKERS, INTERVAL
 from data.earnings import get_earnings_dates, days_until_next_earnings
-from features.engineering import add_technical_features, add_time_features, FEATURE_COLS
+from features.engineering import (
+    add_technical_features, add_time_features,
+    add_bear_features, FEATURE_COLS, BEAR_FEATURE_COLS
+)
+from pathlib import Path
 from models import lgbm_model, cnn_lstm
 from models.ensemble import load_ensemble, build_meta_features
 from risk.manager import RiskManager
-from risk.regime import get_market_regime, filter_signal_by_regime
+from risk.regime import get_market_regime, filter_signal_by_regime, get_stable_model_regime
 from sentiment.pipeline import compute_ticker_sentiment
 from execution.alpaca import get_account, get_latest_price, execute_signal, get_positions
 
-
-VIX_HALT_THRESHOLD = 30.0  # regime filter — don't trade in high fear
+VIX_HALT_THRESHOLD = 30.0
+SAVE_DIR = Path("D:/ml-daytrade/models/saved")
+BULL_REGIMES = {"BULL", "NEUTRAL"}
+BEAR_REGIMES = {"BEAR", "CHOPPY", "HIGH_FEAR"}
 
 
 def load_models(n_features: int):
-    lgbm = lgbm_model.load()
-    cnn = cnn_lstm.load(input_size=n_features)
-    meta = load_ensemble()
-    return lgbm, cnn, meta
+    """Load both bull and bear model sets."""
+    from features.engineering import BEAR_FEATURE_COLS
+    n_bear_features = len(BEAR_FEATURE_COLS)
+
+    bull_lgbm = lgbm_model.load(SAVE_DIR / "lgbm_bull.pkl")
+    bull_cnn  = cnn_lstm.load(n_features, SAVE_DIR / "cnn_lstm_bull.pt")
+    bull_meta = load_ensemble(SAVE_DIR / "ensemble_bull.pkl")
+
+    bear_lgbm = lgbm_model.load(SAVE_DIR / "lgbm_bear.pkl")
+    bear_cnn  = cnn_lstm.load(n_bear_features, SAVE_DIR / "cnn_lstm_bear.pt")
+    bear_meta = load_ensemble(SAVE_DIR / "ensemble_bear.pkl")
+
+    return (bull_lgbm, bull_cnn, bull_meta), (bear_lgbm, bear_cnn, bear_meta)
+
+
+def select_models(regime_info: dict, bull_models: tuple, bear_models: tuple) -> tuple:
+    """Pick bull or bear model set based on current regime."""
+    if regime_info["regime"] in BULL_REGIMES:
+        return bull_models
+    return bear_models
 
 
 def get_vix_level() -> float:
@@ -33,13 +55,15 @@ def get_vix_level() -> float:
     return float(vix["Close"].iloc[-1])
 
 
-def build_ticker_df(ticker: str, macro: dict) -> pd.DataFrame | None:
+def build_ticker_df(ticker: str, macro: dict, include_bear_features: bool = False) -> pd.DataFrame | None:
     try:
         df = get_ohlcv(ticker, period="3mo", interval=INTERVAL, use_cache=False)
         df = merge_macro_features(df, macro)
         df = add_technical_features(df)
         df = add_time_features(df)
-        df["sentiment_score"] = 0.0  # live sentiment added separately
+        if include_bear_features:
+            df = add_bear_features(df)
+        df["sentiment_score"] = 0.0
         df["ticker"] = ticker
         df.dropna(inplace=True)
         return df
@@ -50,7 +74,8 @@ def build_ticker_df(ticker: str, macro: dict) -> pd.DataFrame | None:
 
 def run_once(
     risk_manager: RiskManager,
-    lgbm, cnn, meta,
+    bull_models: tuple,
+    bear_models: tuple,
     use_live_sentiment: bool = True,
 ) -> list[dict]:
     """
@@ -74,14 +99,28 @@ def run_once(
         print("HALTED — regime filter")
         return []
 
+    # Select bull or bear model — requires 3 consecutive regime signals to switch
+    stable_regime    = get_stable_model_regime(regime_info["regime"])
+    using_bear       = stable_regime == "BEAR"
+    lgbm, cnn, meta  = bear_models if using_bear else bull_models
+    min_conf         = 0.35 if using_bear else 0.50  # bull raised to 0.50 for selectivity
+    max_trades       = 5
+    print(f"Model set: {stable_regime} (signal: {regime_info['regime']}, min_conf: {min_conf})")
+
     # Account state
     account = get_account()
     capital = float(account["portfolio_value"])
-    print(f"Portfolio: ${capital:,.2f} | Cash: ${account['cash']:,.2f}")
+    cash    = float(account["cash"])
+    print(f"Portfolio: ${capital:,.2f} | Cash: ${cash:,.2f}")
     risk_manager.update_peak(capital)
 
     if risk_manager.is_halted(capital):
         print("HALTED — max drawdown breached")
+        return []
+
+    # Safety: never deploy more than available cash
+    if cash <= 0:
+        print("HALTED — no cash available")
         return []
 
     # Macro data (shared across tickers)
@@ -111,7 +150,7 @@ def run_once(
         if ticker in risk_manager.open_positions:
             continue
 
-        df = build_ticker_df(ticker, macro)
+        df = build_ticker_df(ticker, macro, include_bear_features=using_bear)
         if df is None or len(df) < cnn_lstm.SEQ_LEN + 1:
             continue
 
@@ -121,7 +160,8 @@ def run_once(
 
         # Ensemble prediction
         try:
-            X_meta, _ = build_meta_features(df, lgbm, cnn)
+            feat_cols = BEAR_FEATURE_COLS if using_bear else None
+            X_meta, _ = build_meta_features(df, lgbm, cnn, feature_cols=feat_cols)
             probs = meta.predict_proba(X_meta)
             signal = int(meta.predict(X_meta)[-1]) - 1
             confidence = float(probs[-1].max())
@@ -153,6 +193,7 @@ def run_once(
             current_capital=capital,
             confidence=confidence,
             days_to_earnings=dte,
+            min_confidence=min_conf,
         )
 
         # Scale qty by regime size multiplier
@@ -179,13 +220,22 @@ def run_once(
         approved = "APPROVED" if s["approved"] else f"REJECTED {s['reason']}"
         print(f"{s['ticker']:6} {label:6} {s['confidence']:.3f}  ${s['price']:7.2f} {s['qty']:5}  {s['regime']:8} {approved}")
 
-    # Execute approved signals
+    # Execute top N approved signals — hard cap at max_trades and available cash
     executed = []
+    deployed = 0.0
     for s in signals:
-        if s["approved"] and s["qty"] > 0:
-            result = execute_signal(s["ticker"], s["signal"], s["qty"])
-            if result:
-                executed.append({**s, "order": result})
+        if len(executed) >= max_trades:
+            break
+        if not s["approved"] or s["qty"] <= 0:
+            continue
+        trade_cost = s["qty"] * s["price"]
+        if deployed + trade_cost > cash:
+            print(f"  {s['ticker']}: skipped — would exceed available cash")
+            continue
+        result = execute_signal(s["ticker"], s["signal"], s["qty"])
+        if result:
+            executed.append({**s, "order": result})
+            deployed += trade_cost
 
     print(f"\nExecuted {len(executed)} trades.")
     return executed

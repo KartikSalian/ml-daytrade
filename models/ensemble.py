@@ -48,13 +48,14 @@ def build_meta_features(
     df: pd.DataFrame,
     lgbm: object,
     cnn: cnn_lstm.CNNLSTM,
+    feature_cols: list | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Get probability outputs from both models — properly aligned."""
     # LightGBM probabilities for all rows
-    lgbm_probs = lgbm_model.predict_proba(lgbm, df)
+    lgbm_probs = lgbm_model.predict_proba(lgbm, df, feature_cols=feature_cols)
 
     # CNN-LSTM sequences and probabilities
-    sequences, labels = cnn_lstm.build_sequences(df, seq_len=cnn_lstm.SEQ_LEN)
+    sequences, labels = cnn_lstm.build_sequences(df, seq_len=cnn_lstm.SEQ_LEN, feature_cols=feature_cols)
     cnn_probs = cnn_lstm.predict_proba(cnn, sequences)
 
     # Exact alignment: select only the lgbm rows that CNN-LSTM outputs correspond to
@@ -71,16 +72,33 @@ def build_meta_features(
     return meta_X, labels
 
 
-def train(df: pd.DataFrame) -> tuple[WeightedEnsemble, object, cnn_lstm.CNNLSTM]:
+def train(
+    df: pd.DataFrame,
+    save_path: Path | None = None,
+    feature_cols: list | None = None,
+    lgbm_model_obj=None,
+    cnn_model_obj=None,
+    lgbm_path: Path | None = None,
+    cnn_path: Path | None = None,
+) -> tuple[WeightedEnsemble, object, cnn_lstm.CNNLSTM]:
     print("Loading base models...")
-    lgbm = lgbm_model.load()
-    n_features = len([c for c in FEATURE_COLS if c in df.columns])
-    cnn = cnn_lstm.load(input_size=n_features)
+    cols = feature_cols if feature_cols is not None else FEATURE_COLS
+    n_features = len([c for c in cols if c in df.columns])
+
+    if lgbm_model_obj is not None:
+        lgbm = lgbm_model_obj
+    else:
+        lgbm = lgbm_model.load(lgbm_path)
+
+    if cnn_model_obj is not None:
+        cnn = cnn_model_obj
+    else:
+        cnn = cnn_lstm.load(input_size=n_features, path=cnn_path)
 
     print("Finding optimal weights on validation set...")
     split = int(len(df) * 0.8)
     val_df = df.iloc[split:]
-    X_meta_val, y_val = build_meta_features(val_df, lgbm, cnn)
+    X_meta_val, y_val = build_meta_features(val_df, lgbm, cnn, feature_cols=feature_cols)
 
     # Grid search over weights
     best_acc, best_w = 0.0, 0.5
@@ -96,15 +114,17 @@ def train(df: pd.DataFrame) -> tuple[WeightedEnsemble, object, cnn_lstm.CNNLSTM]
     print(f"Best weights: LightGBM={best_w:.2f} CNN={1-best_w:.2f}  val_acc={best_acc:.4f}")
     print(classification_report(y_val, preds, target_names=["SELL", "HOLD", "BUY"]))
 
-    with open(ENSEMBLE_PATH, "wb") as f:
+    p = Path(save_path) if save_path else ENSEMBLE_PATH
+    with open(p, "wb") as f:
         pickle.dump(meta, f)
-    print(f"Ensemble saved to {ENSEMBLE_PATH}")
+    print(f"Ensemble saved to {p}")
 
     return meta, lgbm, cnn
 
 
-def load_ensemble() -> WeightedEnsemble:
-    with open(ENSEMBLE_PATH, "rb") as f:
+def load_ensemble(path: Path | None = None) -> WeightedEnsemble:
+    p = Path(path) if path else ENSEMBLE_PATH
+    with open(p, "rb") as f:
         return pickle.load(f)
 
 

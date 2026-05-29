@@ -30,9 +30,22 @@ def get_news(
         "token": key,
     }
 
-    resp = requests.get(f"{FINNHUB_BASE}/company-news", params=params, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+    for attempt in range(3):
+        try:
+            resp = requests.get(f"{FINNHUB_BASE}/company-news", params=params, timeout=15)
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.exceptions.Timeout, requests.exceptions.HTTPError) as e:
+            # Mask API key from error message before re-raising
+            err_str = str(e)
+            key = params.get("token", "")
+            if key:
+                err_str = err_str.replace(key, "***")
+            if attempt < 2:
+                time.sleep(3 * (attempt + 1))
+            else:
+                raise requests.exceptions.HTTPError(err_str) from None
+    return []
 
 
 def get_daily_sentiment_inputs(

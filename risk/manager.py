@@ -108,13 +108,18 @@ class RiskManager:
             return {"qty": 0, "reason": "max_positions_reached"}
 
         stop = atr_stop_loss(entry_price, atr, signal, self.atr_multiplier)
+
+        # Step 1: ATR-based risk sizing — risk exactly risk_per_trade of capital
         qty = position_size_fixed_risk(
             self.capital, entry_price, stop, self.risk_per_trade
         )
         qty = max(0, int(qty))
 
-        # Hard cap: no single position can exceed max_position_pct of capital
-        max_qty_by_value = int(self.capital * self.max_position_pct / entry_price)
+        # Step 2: Dynamic cap — spread capital evenly across max positions
+        # Volatile stocks: ATR gives small qty naturally (well under cap)
+        # Stable stocks: ATR gives large qty → cap kicks in
+        max_per_position = (self.capital / self.max_positions) * 0.8
+        max_qty_by_value = int(max_per_position / entry_price)
         qty = min(qty, max_qty_by_value)
 
         dollar_risk = qty * abs(entry_price - stop)

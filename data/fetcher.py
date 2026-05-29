@@ -98,6 +98,12 @@ def merge_macro_features(ohlcv: pd.DataFrame, macro: dict[str, pd.DataFrame]) ->
         if etf is not None:
             df[col] = etf["Close"].pct_change().reindex(df.index, method="ffill")
 
+    # Bear market macro features
+    for key, col in [("HYG", "HYG_ret"), ("TLT", "TLT_ret"), ("DXY", "DXY_ret")]:
+        etf = macro.get(key)
+        if etf is not None:
+            df[col] = etf["Close"].pct_change().reindex(df.index, method="ffill")
+
     df.dropna(inplace=True)
     return df
 

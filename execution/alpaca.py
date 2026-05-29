@@ -1,7 +1,10 @@
 import os
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus
+from alpaca.trading.requests import (
+    MarketOrderRequest, LimitOrderRequest,
+    StopLossRequest, TrailingStopOrderRequest,
+)
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderStatus, OrderClass
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest
 
@@ -103,21 +106,70 @@ def close_all_positions() -> None:
     print("All positions closed.")
 
 
+TRAILING_STOP_PCT = 1.5  # trail 1.5% below highest price reached
+
+
 def execute_signal(
     ticker: str,
     signal: int,
     qty: int,
     approved: bool = True,
+    stop_loss: float | None = None,
 ) -> dict | None:
     """
     Execute a trade signal through Alpaca paper trading.
-    signal: 1=BUY, -1=SELL/SHORT, 0=HOLD
+    BUY orders use a trailing stop (1.5%) — moves up with price, never down.
+    Falls back to plain market order if trailing stop is rejected.
     """
     if not approved or signal == 0 or qty <= 0:
         return None
 
     side = "buy" if signal == 1 else "sell"
-    print(f"  Executing {side.upper()} {qty} {ticker}...")
-    result = submit_market_order(ticker, qty, side)
+    order_side = OrderSide.BUY if signal == 1 else OrderSide.SELL
+    print(f"  Executing {side.upper()} {qty} {ticker} (trailing stop {TRAILING_STOP_PCT}%)...")
+
+    client = _get_client()
+
+    def _submit_trailing() -> dict:
+        req = TrailingStopOrderRequest(
+            symbol=ticker,
+            qty=qty,
+            side=order_side,
+            time_in_force=TimeInForce.DAY,
+            trail_percent=TRAILING_STOP_PCT,
+        )
+        order = client.submit_order(req)
+        return {
+            "id": str(order.id),
+            "ticker": order.symbol,
+            "qty": float(order.qty),
+            "side": str(order.side),
+            "status": str(order.status),
+            "type": str(order.type),
+        }
+
+    def _submit_plain() -> dict:
+        req = MarketOrderRequest(
+            symbol=ticker,
+            qty=qty,
+            side=order_side,
+            time_in_force=TimeInForce.DAY,
+        )
+        order = client.submit_order(req)
+        return {
+            "id": str(order.id),
+            "ticker": order.symbol,
+            "qty": float(order.qty),
+            "side": str(order.side),
+            "status": str(order.status),
+            "type": str(order.type),
+        }
+
+    try:
+        result = _submit_trailing()
+    except Exception as e:
+        print(f"  Trailing stop rejected — submitting plain order: {e}")
+        result = _submit_plain()
+
     print(f"  Order {result['id']}: {result['status']}")
     return result

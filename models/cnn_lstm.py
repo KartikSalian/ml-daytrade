@@ -73,8 +73,9 @@ class CNNLSTM(nn.Module):
         return self.fc(out)              # → (batch, 3)
 
 
-def build_sequences(df: pd.DataFrame, seq_len: int = SEQ_LEN):
-    available = [c for c in FEATURE_COLS if c in df.columns]
+def build_sequences(df: pd.DataFrame, seq_len: int = SEQ_LEN, feature_cols: list | None = None):
+    cols = feature_cols if feature_cols is not None else FEATURE_COLS
+    available = [c for c in cols if c in df.columns]
     has_target = "target" in df.columns
     sequences, labels = [], []
 
@@ -90,9 +91,21 @@ def build_sequences(df: pd.DataFrame, seq_len: int = SEQ_LEN):
     return np.array(sequences, dtype=np.float32), np.array(labels, dtype=np.int64)
 
 
-def train(df: pd.DataFrame, val_ratio: float = 0.2) -> CNNLSTM:
+def train(
+    df: pd.DataFrame,
+    val_ratio: float = 0.2,
+    save_path: Path | None = None,
+    class_weights: list[float] | None = None,
+    feature_cols: list | None = None,
+) -> CNNLSTM:
+    """
+    class_weights: [sell_w, hold_w, buy_w]
+      None               — auto-balanced from class counts
+      [0.5, 1.0, 2.0]   — bull mindset: favour BUY
+      [2.0, 1.0, 0.5]   — bear mindset: favour SELL
+    """
     print(f"Building sequences (seq_len={SEQ_LEN})...")
-    X, y = build_sequences(df)
+    X, y = build_sequences(df, feature_cols=feature_cols)
     print(f"Sequences: {X.shape}, Labels: {y.shape}")
 
     split = int(len(X) * (1 - val_ratio))
@@ -106,9 +119,11 @@ def train(df: pd.DataFrame, val_ratio: float = 0.2) -> CNNLSTM:
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5)
 
-    # class weights for imbalanced target
-    counts = np.bincount(y_train)
-    weights = torch.tensor(1.0 / counts, dtype=torch.float32).to(DEVICE)
+    if class_weights is not None:
+        weights = torch.tensor(class_weights, dtype=torch.float32).to(DEVICE)
+    else:
+        counts = np.bincount(y_train)
+        weights = torch.tensor(1.0 / counts, dtype=torch.float32).to(DEVICE)
     criterion = nn.CrossEntropyLoss(weight=weights)
 
     best_val_acc = 0.0
@@ -136,19 +151,21 @@ def train(df: pd.DataFrame, val_ratio: float = 0.2) -> CNNLSTM:
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), MODEL_PATH)
+            torch.save(model.state_dict(), save_path if save_path else MODEL_PATH)
 
         if (epoch + 1) % 5 == 0:
             print(f"  Epoch {epoch+1}/{EPOCHS}  val_acc={val_acc:.4f}  best={best_val_acc:.4f}")
 
     print(f"\nBest val accuracy: {best_val_acc:.4f}")
-    model.load_state_dict(torch.load(MODEL_PATH, weights_only=True))
+    p = save_path if save_path else MODEL_PATH
+    model.load_state_dict(torch.load(p, weights_only=True))
     return model
 
 
-def load(input_size: int) -> CNNLSTM:
+def load(input_size: int, path: Path | None = None) -> CNNLSTM:
+    p = Path(path) if path else MODEL_PATH
     model = CNNLSTM(input_size=input_size).to(DEVICE)
-    model.load_state_dict(torch.load(MODEL_PATH, weights_only=True, map_location=DEVICE))
+    model.load_state_dict(torch.load(p, weights_only=True, map_location=DEVICE))
     model.eval()
     return model
 

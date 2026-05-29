@@ -1,6 +1,63 @@
 import numpy as np
 import pandas as pd
 import yfinance as yf
+from pathlib import Path
+import json
+
+REGIME_STATE_PATH = Path(__file__).parent.parent / "data" / "regime_state.json"
+REGIME_CONFIRM_PERIODS = 3  # require 3 consecutive cycles before switching model
+
+
+def _load_regime_state() -> dict:
+    if REGIME_STATE_PATH.exists():
+        with open(REGIME_STATE_PATH) as f:
+            return json.load(f)
+    return {"confirmed_regime": "BULL", "pending_regime": "BULL", "pending_count": 0}
+
+
+def _save_regime_state(state: dict) -> None:
+    REGIME_STATE_PATH.parent.mkdir(exist_ok=True)
+    with open(REGIME_STATE_PATH, "w") as f:
+        json.dump(state, f)
+
+
+def get_stable_model_regime(current_regime: str) -> str:
+    """
+    Returns the model regime to USE — only switches after 3 consecutive
+    cycles of the same new regime. Prevents whipsawing between bull/bear models
+    on short-lived VIX spikes or single-day signals.
+    """
+    bull_regimes = {"BULL", "NEUTRAL"}
+    bear_regimes = {"BEAR", "CHOPPY", "HIGH_FEAR"}
+
+    # Simplify to bull/bear for model selection
+    current_model = "BULL" if current_regime in bull_regimes else "BEAR"
+
+    state = _load_regime_state()
+    confirmed = state["confirmed_regime"]
+
+    if current_model == confirmed:
+        # Same as confirmed — reset pending
+        state["pending_regime"] = current_model
+        state["pending_count"] = 0
+    elif current_model == state["pending_regime"]:
+        # Same pending signal — increment counter
+        state["pending_count"] += 1
+        if state["pending_count"] >= REGIME_CONFIRM_PERIODS:
+            print(f"Regime switch confirmed: {confirmed} -> {current_model} ({REGIME_CONFIRM_PERIODS} consecutive signals)")
+            state["confirmed_regime"] = current_model
+            state["pending_count"] = 0
+    else:
+        # New different signal — start counting
+        state["pending_regime"] = current_model
+        state["pending_count"] = 1
+
+    _save_regime_state(state)
+
+    if state["confirmed_regime"] != current_model:
+        print(f"Regime signal: {current_model} (pending {state['pending_count']}/{REGIME_CONFIRM_PERIODS} — holding {state['confirmed_regime']} model)")
+
+    return state["confirmed_regime"]
 
 
 def get_market_regime() -> dict:

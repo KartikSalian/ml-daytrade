@@ -16,6 +16,10 @@ MACRO_TICKERS = {
     "ENERGY_ETF": "XLE",
     "FINANCE_ETF": "XLF",
     "HEALTH_ETF": "XLV",
+    # Bear market macro indicators
+    "HYG": "HYG",      # High yield corporate bond ETF (credit stress)
+    "TLT": "TLT",      # 20yr treasury ETF (flight to safety)
+    "DXY": "UUP",      # US dollar ETF (risk-off indicator)
 }
 
 INTERVAL = "1h"

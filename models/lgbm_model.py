@@ -15,17 +15,28 @@ SAVE_DIR.mkdir(exist_ok=True)
 MODEL_PATH = SAVE_DIR / "lgbm_model.pkl"
 
 
-def prepare_xy(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
-    available = [c for c in FEATURE_COLS if c in df.columns]
+def prepare_xy(df: pd.DataFrame, feature_cols: list | None = None) -> tuple[pd.DataFrame, pd.Series]:
+    cols = feature_cols if feature_cols is not None else FEATURE_COLS
+    available = [c for c in cols if c in df.columns]
     X = df[available].copy()
     y = df["target"].copy()
-    # LightGBM needs 0,1,2 for multiclass
     y = y + 1  # -1→0, 0→1, 1→2
     return X, y
 
 
-def train(df: pd.DataFrame, n_splits: int = 5) -> lgb.LGBMClassifier:
-    X, y = prepare_xy(df)
+def train(
+    df: pd.DataFrame,
+    n_splits: int = 5,
+    class_weight: dict | str = "balanced",
+    feature_cols: list | None = None,
+) -> lgb.LGBMClassifier:
+    """
+    class_weight examples:
+      "balanced"              — default, equal weight
+      {0: 2.0, 1: 1.0, 2: 0.5}  — bear mindset: favour SELL (0), penalise BUY (2)
+      {0: 0.5, 1: 1.0, 2: 2.0}  — bull mindset: favour BUY (2), penalise SELL (0)
+    """
+    X, y = prepare_xy(df, feature_cols=feature_cols)
 
     params = dict(
         objective="multiclass",
@@ -39,7 +50,7 @@ def train(df: pd.DataFrame, n_splits: int = 5) -> lgb.LGBMClassifier:
         colsample_bytree=0.8,
         reg_alpha=0.1,
         reg_lambda=0.1,
-        class_weight="balanced",
+        class_weight=class_weight,
         random_state=42,
         n_jobs=-1,
         verbose=-1,
@@ -80,20 +91,24 @@ def get_feature_importance(model: lgb.LGBMClassifier, feature_names: list[str]) 
     return importance
 
 
-def save(model: lgb.LGBMClassifier) -> None:
-    with open(MODEL_PATH, "wb") as f:
+def save(model: lgb.LGBMClassifier, path: Path | None = None) -> None:
+    p = Path(path) if path else MODEL_PATH
+    with open(p, "wb") as f:
         pickle.dump(model, f)
-    print(f"Model saved to {MODEL_PATH}")
+    print(f"Model saved to {p}")
 
 
-def load() -> lgb.LGBMClassifier:
-    with open(MODEL_PATH, "rb") as f:
+def load(path: Path | None = None) -> lgb.LGBMClassifier:
+    p = Path(path) if path else MODEL_PATH
+    with open(p, "rb") as f:
         return pickle.load(f)
 
 
-def predict_proba(model: lgb.LGBMClassifier, X: pd.DataFrame) -> np.ndarray:
+def predict_proba(model: lgb.LGBMClassifier, X: pd.DataFrame,
+                  feature_cols: list | None = None) -> np.ndarray:
     """Returns probabilities for [SELL, HOLD, BUY] classes."""
-    available = [c for c in FEATURE_COLS if c in X.columns]
+    cols = feature_cols if feature_cols is not None else FEATURE_COLS
+    available = [c for c in cols if c in X.columns]
     return model.predict_proba(X[available])
 
 

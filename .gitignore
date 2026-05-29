@@ -12,5 +12,6 @@ data/cache/
 data/sentiment_history.csv
 data/trade_journal.csv
 data/autorun.log
+data/autorun.lock
 data/earnings_cache.pkl
 .DS_Store
