@@ -106,9 +106,6 @@ def close_all_positions() -> None:
     print("All positions closed.")
 
 
-TRAILING_STOP_PCT = 1.5  # trail 1.5% below highest price reached
-
-
 def execute_signal(
     ticker: str,
     signal: int,
@@ -118,58 +115,59 @@ def execute_signal(
 ) -> dict | None:
     """
     Execute a trade signal through Alpaca paper trading.
-    BUY orders use a trailing stop (1.5%) — moves up with price, never down.
-    Falls back to plain market order if trailing stop is rejected.
+    Entry = immediate market order (fills at current price).
+    Stop loss attached as OTO leg if stop price is available — falls back to plain market order.
+    Primary exit is EOD close at 3:50 PM EST.
     """
     if not approved or signal == 0 or qty <= 0:
         return None
 
     side = "buy" if signal == 1 else "sell"
     order_side = OrderSide.BUY if signal == 1 else OrderSide.SELL
-    print(f"  Executing {side.upper()} {qty} {ticker} (trailing stop {TRAILING_STOP_PCT}%)...")
-
     client = _get_client()
 
-    def _submit_trailing() -> dict:
-        req = TrailingStopOrderRequest(
-            symbol=ticker,
-            qty=qty,
-            side=order_side,
-            time_in_force=TimeInForce.DAY,
-            trail_percent=TRAILING_STOP_PCT,
-        )
-        order = client.submit_order(req)
-        return {
-            "id": str(order.id),
-            "ticker": order.symbol,
-            "qty": float(order.qty),
-            "side": str(order.side),
-            "status": str(order.status),
-            "type": str(order.type),
-        }
+    # Try market order with OTO stop loss protection
+    if stop_loss and signal == 1:
+        try:
+            req = MarketOrderRequest(
+                symbol=ticker,
+                qty=qty,
+                side=order_side,
+                time_in_force=TimeInForce.DAY,
+                order_class=OrderClass.OTO,
+                stop_loss=StopLossRequest(stop_price=round(stop_loss, 2)),
+            )
+            order = client.submit_order(req)
+            result = {
+                "id": str(order.id),
+                "ticker": order.symbol,
+                "qty": float(order.qty),
+                "side": str(order.side),
+                "status": str(order.status),
+                "type": str(order.type),
+            }
+            print(f"  Executing {side.upper()} {qty} {ticker} (stop at ${stop_loss:.2f})...")
+            print(f"  Order {result['id']}: {result['status']}")
+            return result
+        except Exception as e:
+            print(f"  OTO order failed — submitting plain market order: {e}")
 
-    def _submit_plain() -> dict:
-        req = MarketOrderRequest(
-            symbol=ticker,
-            qty=qty,
-            side=order_side,
-            time_in_force=TimeInForce.DAY,
-        )
-        order = client.submit_order(req)
-        return {
-            "id": str(order.id),
-            "ticker": order.symbol,
-            "qty": float(order.qty),
-            "side": str(order.side),
-            "status": str(order.status),
-            "type": str(order.type),
-        }
-
-    try:
-        result = _submit_trailing()
-    except Exception as e:
-        print(f"  Trailing stop rejected — submitting plain order: {e}")
-        result = _submit_plain()
-
+    # Fallback: plain market order
+    req = MarketOrderRequest(
+        symbol=ticker,
+        qty=qty,
+        side=order_side,
+        time_in_force=TimeInForce.DAY,
+    )
+    order = client.submit_order(req)
+    result = {
+        "id": str(order.id),
+        "ticker": order.symbol,
+        "qty": float(order.qty),
+        "side": str(order.side),
+        "status": str(order.status),
+        "type": str(order.type),
+    }
+    print(f"  Executing {side.upper()} {qty} {ticker}...")
     print(f"  Order {result['id']}: {result['status']}")
     return result
